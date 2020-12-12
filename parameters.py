@@ -11,10 +11,13 @@ def basic_training_parameters(parser):
     parser.add_argument('--tv_split_perc',        default=0.8,      type=float, help='Percentage with which the training dataset is split into training/validation.')
     parser.add_argument('--augmentation',         default='base',   type=str,   help='Type of preprocessing/augmentation to use on the data.  \
                                                                                       Available: base (standard), adv (with color/brightness changes), big (Images of size 256x256), red (No RandomResizedCrop).')
+    parser.add_argument('--split_subset_perc',    default=1.,        type=float, help='Percentage with which the training/test set is split into a subset.')
 
     ### General Training Parameters
     parser.add_argument('--lr',                default=0.00001,  type=float,        help='Learning Rate for network parameters.')
     parser.add_argument('--fc_lr',             default=-1,       type=float,        help='Optional. If not -1, sets the learning rate for the final linear embedding layer.')
+    parser.add_argument('--gen_lr',            default=0.001,    type=float,        help='Optional. If not -1, sets the learning rate for the generator.')
+    parser.add_argument('--dis_lr',            default=0.001,    type=float,        help='Optional. If not -1, sets the learning rate for the discriminator.')
     parser.add_argument('--decay',             default=0.0004,   type=float,        help='Weight decay placed on network weights.')
     parser.add_argument('--n_epochs',          default=150,      type=int,          help='Number of training epochs.')
     parser.add_argument('--kernels',           default=6,        type=int,          help='Number of workers for pytorch dataloader.')
@@ -23,6 +26,9 @@ def basic_training_parameters(parser):
     parser.add_argument('--scheduler',         default='step',   type=str,          help='Type of learning rate scheduling. Currently supported: step')
     parser.add_argument('--gamma',             default=0.3,      type=float,        help='Learning rate reduction after tau epochs.')
     parser.add_argument('--tau',               default=[1000], nargs='+',type=int , help='Stepsize before reducing learning rate.')
+    parser.add_argument('--eval_frq',          default=1,        type=int,          help='Number of eval frequency.')
+    parser.add_argument('--generation',        action='store_true',                 help='Flag. If set, using hard generation.')
+    parser.add_argument('--use_softmax',       action='store_true',                 help='Flag. If set, using softmax celoss.')
 
     ##### Loss-specific Settings
     parser.add_argument('--optim',           default='adam',        type=str,   help='Optimization method to use. Currently supported: adam & sgd.')
@@ -61,9 +67,10 @@ def basic_training_parameters(parser):
 def wandb_parameters(parser):
     ### Online Logging/Wandb Log Arguments
     parser.add_argument('--log_online',      action='store_true',            help='Flag. If set, run metrics are stored online in addition to offline logging. Should generally be set.')
-    parser.add_argument('--wandb_key',       default='<your_api_key_here>',  type=str,   help='API key for W&B.')
-    parser.add_argument('--project',         default='Sample_Project',       type=str,   help='Name of the project - relates to W&B project names. In --savename default setting part of the savename.')
-    parser.add_argument('--group',           default='Sample_Group',         type=str,   help='Name of the group - relates to W&B group names - all runs with same setup but different seeds are logged into one group. \
+    parser.add_argument('--online-backend',  default='wandb',                help='set backend')
+    parser.add_argument('--wandb_key',       default='aec4bcaf6fc416eff602f64d8d176e38b6f4b9b9',  type=str,   help='API key for W&B.')
+    parser.add_argument('--project',         default='dml',       type=str,   help='Name of the project - relates to W&B project names. In --savename default setting part of the savename.')
+    parser.add_argument('--group',           default='huzheng',         type=str,   help='Name of the group - relates to W&B group names - all runs with same setup but different seeds are logged into one group. \
                                                                                                In --savename default setting part of the savename.')
     return parser
 

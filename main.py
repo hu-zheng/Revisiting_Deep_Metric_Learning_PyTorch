@@ -135,6 +135,11 @@ opt.n_classes  = len(dataloaders['training'].dataset.avail_classes)
 
 
 
+"""============================================================================"""
+#################### SOFTMAX SETTING ##################
+if opt.use_softmax:
+    CrossEntropyLoss, to_optim = criteria.select('softmax', opt, to_optim)
+    _ = CrossEntropyLoss.to(opt.device)
 
 """============================================================================"""
 #################### CREATE LOGGING FILES ###############
@@ -151,6 +156,7 @@ LOG = logger.LOGGER(opt, sub_loggers=sub_loggers, start_new=True, log_online=opt
 batchminer   = bmine.select(opt.batch_mining, opt)
 criterion, to_optim = criteria.select(opt.loss, opt, to_optim, batchminer)
 _ = criterion.to(opt.device)
+print([ x['lr'] for x in to_optim])
 
 if 'criterion' in train_data_sampler.name:
     train_data_sampler.internal_criterion = criterion
@@ -234,28 +240,52 @@ for epoch in range(opt.n_epochs):
         model_args = {'x':input.to(opt.device)}
         # Needed for MixManifold settings.
         if 'mix' in opt.arch: model_args['labels'] = class_labels
-        embeds  = model(**model_args)
-        if isinstance(embeds, tuple): embeds, (avg_features, features) = embeds
-
+        embedding_org  = model(**model_args)
+        if isinstance(embedding_org, tuple): embedding_org, (embedding_y_orig, features) = embedding_org   
         ### Compute Loss
-        loss_args['batch']          = embeds
+        loss_args['batch']          = embedding_org
         loss_args['labels']         = class_labels
         loss_args['f_embed']        = model.model.last_linear
-        loss_args['batch_features'] = features
-        loss      = criterion(**loss_args)
+        # loss_args['batch_features'] = features
 
-        ###
-        optimizer.zero_grad()
-        loss.backward()
+        if not opt.use_softmax:
+            loss      = criterion(**loss_args)
 
-        ### Compute Model Gradients and log them!
-        grads              = np.concatenate([p.grad.detach().cpu().numpy().flatten() for p in model.parameters() if p.grad is not None])
-        grad_l2, grad_max  = np.mean(np.sqrt(np.mean(np.square(grads)))), np.mean(np.max(np.abs(grads)))
-        LOG.progress_saver['Model Grad'].log('Grad L2',  grad_l2,  group='L2')
-        LOG.progress_saver['Model Grad'].log('Grad Max', grad_max, group='Max')
+            ###
+            optimizer.zero_grad()
+            loss.backward()
+            
+            ### Update network weights!
+            optimizer.step()
 
-        ### Update network weights!
-        optimizer.step()
+            ### Compute Model Gradients and log them!
+            grads              = np.concatenate([p.grad.detach().cpu().numpy().flatten() for p in model.parameters() if p.grad is not None])
+            grad_l2, grad_max  = np.mean(np.sqrt(np.mean(np.square(grads)))), np.mean(np.max(np.abs(grads)))
+            LOG.progress_saver['Model Grad'].log('Grad L2',  grad_l2,  group='L2')
+            LOG.progress_saver['Model Grad'].log('Grad Max', grad_max, group='Max')
+
+        else:
+            # 计算流程
+            labels = class_labels
+
+            ##### 训练骨干网络 #####
+            loss      = criterion(**loss_args)     
+            Jmetric = Jm = loss
+            celoss = CrossEntropyLoss(embedding_org, labels)
+            J_F = Jmetric + celoss
+            optimizer.zero_grad()
+            J_F.backward()
+            optimizer.step()
+
+            LOG.progress_saver['Train'].log('Jm', Jm.item(), group='J_F')
+            LOG.progress_saver['Train'].log('Jmetric', Jmetric.item(), group='J_F')
+            LOG.progress_saver['Train'].log('celoss', celoss.item(), group='J_F')
+
+            ### Compute Model Gradients and log them!
+            grads              = np.concatenate([p.grad.detach().cpu().numpy().flatten() for p in model.parameters() if p.grad is not None])
+            grad_l2, grad_max  = np.mean(np.sqrt(np.mean(np.square(grads)))), np.mean(np.max(np.abs(grads)))
+            LOG.progress_saver['Model Grad'].log('Grad L2',  grad_l2,  group='L2')
+            LOG.progress_saver['Model Grad'].log('Grad Max', grad_max, group='Max')
 
         ###
         loss_collect.append(loss.item())
@@ -267,7 +297,7 @@ for epoch in range(opt.n_epochs):
 
         """======================================="""
         if train_data_sampler.requires_storage and train_data_sampler.update_storage:
-            train_data_sampler.replace_storage_entries(embeds.detach().cpu(), input_indices)
+            train_data_sampler.replace_storage_entries(embedding_org.detach().cpu(), input_indices)
 
     result_metrics = {'loss': np.mean(loss_collect)}
 
@@ -281,14 +311,15 @@ for epoch in range(opt.n_epochs):
 
     """======================================="""
     ### Evaluate Metric for Training & Test (& Validation)
-    _ = model.eval()
-    print('\nComputing Testing Metrics...')
-    eval.evaluate(opt.dataset, LOG, metric_computer, [dataloaders['testing']],    model, opt, opt.evaltypes, opt.device, log_key='Test')
-    if opt.use_tv_split:
-        print('\nComputing Validation Metrics...')
-        eval.evaluate(opt.dataset, LOG, metric_computer, [dataloaders['validation']], model, opt, opt.evaltypes, opt.device, log_key='Val')
-    print('\nComputing Training Metrics...')
-    eval.evaluate(opt.dataset, LOG, metric_computer, [dataloaders['evaluation']], model, opt, opt.evaltypes, opt.device, log_key='Train')
+    if epoch % opt.eval_frq == 0 or epoch>=opt.n_epochs*0.95:
+        _ = model.eval()
+        print('\nComputing Testing Metrics...')
+        eval.evaluate(opt.dataset, LOG, metric_computer, [dataloaders['testing']],    model, opt, opt.evaltypes, opt.device, log_key='Test')
+        if opt.use_tv_split:
+            print('\nComputing Validation Metrics...')
+            eval.evaluate(opt.dataset, LOG, metric_computer, [dataloaders['validation']], model, opt, opt.evaltypes, opt.device, log_key='Val')
+        print('\nComputing Training Metrics...')
+        eval.evaluate(opt.dataset, LOG, metric_computer, [dataloaders['evaluation']], model, opt, opt.evaltypes, opt.device, log_key='Train')
 
 
     LOG.update(all=True)
