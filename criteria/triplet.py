@@ -24,9 +24,9 @@ class Criterion(torch.nn.Module):
     def triplet_distance(self, anchor, positive, negative):
         return torch.nn.functional.relu((anchor-positive).pow(2).sum()-(anchor-negative).pow(2).sum()+self.margin)
 
-    def forward(self, batch, labels, **kwargs):
+    def forward(self, batch, labels, use_triplets=False, **kwargs):
         if isinstance(labels, torch.Tensor): labels = labels.cpu().numpy()
         sampled_triplets = self.batchminer(batch, labels)
         loss             = torch.stack([self.triplet_distance(batch[triplet[0],:],batch[triplet[1],:],batch[triplet[2],:]) for triplet in sampled_triplets])
 
-        return torch.mean(loss)
+        return torch.mean(loss) if use_triplets==False else (torch.mean(loss), sampled_triplets)

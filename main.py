@@ -14,6 +14,11 @@ from tqdm import tqdm
 
 import parameters    as par
 
+import hdml
+
+def requires_grad(model, flag=True):
+    for p in model.parameters():
+        p.requires_grad = flag
 
 """==================================================================================================="""
 ################### INPUT ARGUMENTS ###################
@@ -136,9 +141,35 @@ opt.n_classes  = len(dataloaders['training'].dataset.avail_classes)
 
 
 """============================================================================"""
-#################### SOFTMAX SETTING ##################
-if opt.use_softmax:
+#################### HDML SETTING ##################
+if opt.generation:
+    mid_dims = 2048
+    opt_pulling = hdml.TripletPulling().to(opt.device)
+
+    G1 = hdml.Generator(out_channel=mid_dims).to(opt.device)
+    D1 = hdml.Discriminator(in_channel=mid_dims).to(opt.device)
+
+    # optim
+    G_param_groups = [
+        {'params': G1.parameters() , 'lr':opt.gen_lr},
+    ]
+    # D_param_groups = [
+    #     {'params': D1.parameters() , 'lr':opt.dis_lr},
+    # ]
+
+    optimizer_G = torch.optim.Adam(G_param_groups, lr=opt.lr, weight_decay=5e-3)
+    # optimizer_D = torch.optim.Adam(D_param_groups, lr=opt.lr, weight_decay=5e-3)
+    
+    # scheduler
+    scheduler_G = torch.optim.lr_scheduler.StepLR(optimizer_G, step_size=1000, gamma=0.5)
+    # scheduler_D = torch.optim.lr_scheduler.StepLR(optimizer_D, step_size=1000, gamma=0.5)
+
+    # additional loss
+    BCELoss = torch.nn.BCELoss().to(opt.device)
+    M_criterion = hdml.TripletLoss(margin=0.2).to(opt.device)
+    mid_dims, opt.embed_dim = opt.embed_dim, mid_dims
     CrossEntropyLoss, to_optim = criteria.select('softmax', opt, to_optim)
+    mid_dims, opt.embed_dim = opt.embed_dim, mid_dims
     _ = CrossEntropyLoss.to(opt.device)
 
 """============================================================================"""
@@ -227,6 +258,11 @@ for epoch in range(opt.n_epochs):
     start = time.time()
     _ = model.train()
 
+    if opt.generation:
+        G1.train()
+        D1.train()
+
+        jgen = 1.0e+6
 
     loss_collect = []
     data_iterator = tqdm(dataloaders['training'], desc='Epoch {} Training...'.format(epoch))
@@ -246,9 +282,9 @@ for epoch in range(opt.n_epochs):
         loss_args['batch']          = embedding_org
         loss_args['labels']         = class_labels
         loss_args['f_embed']        = model.model.last_linear
-        # loss_args['batch_features'] = features
+        loss_args['batch_features'] = features
 
-        if not opt.use_softmax:
+        if not opt.generation:
             loss      = criterion(**loss_args)
 
             ###
@@ -265,18 +301,49 @@ for epoch in range(opt.n_epochs):
             LOG.progress_saver['Model Grad'].log('Grad Max', grad_max, group='Max')
 
         else:
+            loss_args['use_triplets'] = True
             # 计算流程
+            # requires_grad(model, True)
+            # requires_grad(D1, False)
+            requires_grad(G1, False)
+
             labels = class_labels
+            batch_size, dim = embedding_org.shape
+
+            real_labels = torch.ones([batch_size*3, 1]).to(opt.device)
+            fake_labels = torch.zeros([batch_size*3, 1]).to(opt.device)
 
             ##### 训练骨干网络 #####
-            loss      = criterion(**loss_args)     
-            Jmetric = Jm = loss
-            celoss = CrossEntropyLoss(embedding_org, labels)
+
+
+            beta = 2. # -5(0.2) -2(0.5) -1(0.7)
+            if isinstance(jgen, torch.Tensor):
+                jgen = jgen.item()
+            param = np.exp(-beta / jgen)
+            # print(np.exp(-5 / jgen), np.exp(-2 / jgen), np.exp(-1 / jgen))
+            # param = 0.5
+            loss, sampled_triplets = criterion(**loss_args)
+            # sampled_triplets = bmine.select('random', opt)(embedding_org, labels)
+
+
+            anchors               = [embedding_org[triplet[0],:] for triplet in sampled_triplets]
+            positives             = [embedding_org[triplet[1],:] for triplet in sampled_triplets]
+            negatives             = [embedding_org[triplet[2],:] for triplet in sampled_triplets]
+            embedding             = torch.stack(anchors + positives + negatives, dim=0)
+
+            embedding_l, dis_mean = opt_pulling(embedding, jgen)
+            embedding_z_concate = G1(torch.cat([embedding, embedding_l], dim=0))
+            embedding_yp, embedding_yq = torch.chunk(embedding_z_concate, 2, dim=0)
+            
+            Jm = param * loss
+            Jsyn = (1 - param) * M_criterion(model.model.last_linear(embedding_yq))
+            Jmetric = Jm + Jsyn
+            celoss = CrossEntropyLoss(embedding_y_orig.detach(), labels)
             J_F = Jmetric + celoss
             optimizer.zero_grad()
             J_F.backward()
             optimizer.step()
-
+            LOG.progress_saver['Train'].log('Jsyn',  Jsyn.item(),  group='J_F')
             LOG.progress_saver['Train'].log('Jm', Jm.item(), group='J_F')
             LOG.progress_saver['Train'].log('Jmetric', Jmetric.item(), group='J_F')
             LOG.progress_saver['Train'].log('celoss', celoss.item(), group='J_F')
@@ -286,6 +353,61 @@ for epoch in range(opt.n_epochs):
             grad_l2, grad_max  = np.mean(np.sqrt(np.mean(np.square(grads)))), np.mean(np.max(np.abs(grads)))
             LOG.progress_saver['Model Grad'].log('Grad L2',  grad_l2,  group='L2')
             LOG.progress_saver['Model Grad'].log('Grad Max', grad_max, group='Max')
+
+
+            ##### 训练生成器 #####
+            # 训练生成器G1
+            # requires_grad(model, False)
+            # requires_grad(D1, False)
+            requires_grad(G1, True)
+
+            embedding = embedding.detach()
+            embedding_l = embedding_l.detach()
+            embedding_y_orig = embedding_y_orig.detach()
+
+            embedding_z_concate = G1(torch.cat([embedding, embedding_l], dim=0))
+            embedding_yp, embedding_yq = torch.chunk(embedding_z_concate, 2, dim=0)
+
+            # G1_loss = BCELoss(D1(embedding_yp), real_labels) + BCELoss(D1(embedding_yq), real_labels)
+
+            jrecon = 0.5 * (torch.chunk(embedding_yp, 3, dim=0)[0] - embedding_y_orig).pow(2).mean()
+            jsoft  = 0.5 * CrossEntropyLoss(torch.chunk(embedding_yq, 3, dim=0)[0], labels)
+            jgen = jrecon + jsoft
+            G_loss = jgen
+
+            optimizer_G.zero_grad()
+            G_loss.backward()
+            optimizer_G.step()
+            scheduler_G.step()
+
+            LOG.progress_saver['Train'].log('param', param, group='G_loss')
+            LOG.progress_saver['Train'].log('jrecon', jrecon.item(), group='G_loss')
+            LOG.progress_saver['Train'].log('jsoft', jsoft.item(), group='G_loss')
+            LOG.progress_saver['Train'].log('G_loss', G_loss.item(), group='G_loss')
+
+            # ##### 训练鉴别器 #####
+            # # requires_grad(model, False)
+            # requires_grad(D1, True)
+            # requires_grad(G1, False)
+
+            # embedding_z_concate = G1(torch.cat([embedding, embedding_l], dim=0)).detach()
+            # embedding_yp, embedding_yq = torch.chunk(embedding_z_concate, 2, dim=0)
+
+            # # 鉴别器D1
+            # real_loss_d1 = BCELoss(D1(embedding_y_orig.detach()), torch.ones([batch_size, 1]).to(opt.device)) #detach分离
+            # # real_loss_d1 = BCELoss(D1(embedding_y_orig.detach()), real_labels) #detach分离
+            # fake_loss_d1 = BCELoss(D1(embedding_yp), fake_labels)
+            # D1_loss = 1/2 * (real_loss_d1 + fake_loss_d1)
+                        
+            # D_loss = D1_loss
+
+            # optimizer_D.zero_grad()
+            # D1_loss.backward()
+            # optimizer_D.step()
+            # scheduler_D.step()
+
+            # LOG.progress_saver['Train'].log('D1_loss', D1_loss.item(), group='D_loss')
+
 
         ###
         loss_collect.append(loss.item())
