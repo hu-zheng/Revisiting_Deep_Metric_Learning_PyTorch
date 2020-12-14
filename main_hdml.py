@@ -147,7 +147,7 @@ if opt.generation:
     opt_pulling = hdml.TripletPulling().to(opt.device)
 
     G1 = hdml.Generator(out_channel=mid_dims).to(opt.device)
-    D1 = hdml.Discriminator(in_channel=mid_dims).to(opt.device)
+    # D1 = hdml.Discriminator(in_channel=mid_dims).to(opt.device)
 
     # optim
     G_param_groups = [
@@ -260,7 +260,7 @@ for epoch in range(opt.n_epochs):
 
     if opt.generation:
         G1.train()
-        D1.train()
+        # D1.train()
 
         jgen = 1.0e+6
 
@@ -338,7 +338,7 @@ for epoch in range(opt.n_epochs):
             Jm = param * loss
             Jsyn = (1 - param) * M_criterion(model.model.last_linear(embedding_yq))
             Jmetric = Jm + Jsyn
-            celoss = CrossEntropyLoss(embedding_y_orig.detach(), labels)
+            celoss = CrossEntropyLoss(embedding_y_orig.detach(), labels) #是否回传
             J_F = Jmetric + celoss
             optimizer.zero_grad()
             J_F.backward()

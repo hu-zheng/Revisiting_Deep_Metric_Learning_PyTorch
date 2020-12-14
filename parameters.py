@@ -85,6 +85,9 @@ def loss_specific_parameters(parser):
     ### Triplet-based Losses
     parser.add_argument('--loss_triplet_margin',       default=0.2,         type=float, help='Margin for Triplet Loss')
 
+    ### Reversed Triplet Losses
+    parser.add_argument('--rev_margin',               default=0.1,          type=float, help='Margin for RevTriplet Loss')
+
     ### MarginLoss
     parser.add_argument('--loss_margin_margin',       default=0.2,          type=float, help='Triplet margin.')
     parser.add_argument('--loss_margin_beta_lr',      default=0.0005,       type=float, help='Learning Rate for learnable class margin parameters in MarginLoss')

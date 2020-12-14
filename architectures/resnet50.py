@@ -45,4 +45,5 @@ class Network(torch.nn.Module):
         if self.out_adjust and not self.train:
             x = self.out_adjust(x)
 
-        return x, (enc_out, no_avg_feat)
+        return x, (torch.nn.functional.normalize(enc_out, dim=-1), no_avg_feat)
+        # return x, (enc_out, no_avg_feat)

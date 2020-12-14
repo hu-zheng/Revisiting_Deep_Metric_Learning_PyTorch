@@ -7,13 +7,14 @@ class BatchMiner():
         self.name         = 'semihard'
         self.margin       = vars(opt)['loss_'+opt.loss+'_margin']
 
-    def __call__(self, batch, labels, return_distances=False):
+    def __call__(self, batch, labels, return_distances=False, return_rev_triplets=False):
         if isinstance(labels, torch.Tensor): labels = labels.detach().numpy()
         bs = batch.size(0)
         #Return distance matrix for all elements in batch (BSxBS)
         distances = self.pdist(batch.detach()).detach().cpu().numpy()
 
         positives, negatives = [], []
+        rev_negatives = []
         anchors = []
         for i in range(bs):
             l, d = labels[i], distances[i]
@@ -27,15 +28,24 @@ class BatchMiner():
             #Find negatives that violate tripet constraint semi-negatives
             neg_mask = np.logical_and(neg,d>d[p])
             neg_mask = np.logical_and(neg_mask,d<self.margin+d[p])
+            rev_neg_mask = np.logical_and(neg,~neg_mask)
             if neg_mask.sum()>0:
                 negatives.append(np.random.choice(np.where(neg_mask)[0]))
             else:
                 negatives.append(np.random.choice(np.where(neg)[0]))
+            
+            if rev_neg_mask.sum()>0:
+                rev_negatives.append(np.random.choice(np.where(rev_neg_mask)[0]))
+            else:
+                rev_negatives.append(np.random.choice(np.where(neg)[0]))
 
         sampled_triplets = [[a, p, n] for a, p, n in zip(anchors, positives, negatives)]
 
         if return_distances:
             return sampled_triplets, distances
+        elif return_rev_triplets:
+            sampled_rev_triplets = [[a, p, n] for a, p, n in zip(anchors, positives, rev_negatives)]
+            return sampled_triplets, sampled_rev_triplets
         else:
             return sampled_triplets
 
