@@ -26,7 +26,9 @@ class Criterion(torch.nn.Module):
 
     def forward(self, batch, labels, use_triplets=False, **kwargs):
         if isinstance(labels, torch.Tensor): labels = labels.cpu().numpy()
+        if use_triplets:
+            sampled_triplets, rev_triplets = self.batchminer(batch, labels, return_rev_triplets=True)
         sampled_triplets = self.batchminer(batch, labels)
         loss             = torch.stack([self.triplet_distance(batch[triplet[0],:],batch[triplet[1],:],batch[triplet[2],:]) for triplet in sampled_triplets])
 
-        return torch.mean(loss) if use_triplets==False else (torch.mean(loss), sampled_triplets)
+        return torch.mean(loss) if use_triplets==False else (torch.mean(loss), rev_triplets)
