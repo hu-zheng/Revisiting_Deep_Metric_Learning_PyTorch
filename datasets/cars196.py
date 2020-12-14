@@ -1,5 +1,5 @@
 from datasets.basic_dataset_scaffold import BaseDataset
-import os
+import os, numpy as np
 
 
 def Give(opt, datapath):
@@ -42,6 +42,18 @@ def Give(opt, datapath):
         val_conversion = {i:total_conversion[key] for i,key in enumerate(val)}
         ###
         val_dataset.conversion   = val_conversion
+    elif opt.split_subset_perc:
+        # split_cls_nums = int(len(train)*opt.split_subset_perc)
+        # train, test      = train[:split_cls_nums], test[:split_cls_nums]
+        train_image_dict, test_image_dict = {},{}
+        for key in train:
+            train_ixs = np.random.choice(len(image_dict[key]), int(len(image_dict[key])*opt.split_subset_perc), replace=False)
+            train_image_dict[key] = np.array(image_dict[key])[train_ixs]
+        for key in test:
+            test_ixs = np.random.choice(len(image_dict[key]), int(len(image_dict[key])*opt.split_subset_perc), replace=False)
+            test_image_dict[key] = np.array(image_dict[key])[test_ixs]
+        val_image_dict   = None
+        val_dataset      = None
     else:
         train_image_dict = {key:image_dict[key] for key in train}
         val_image_dict   = None
@@ -52,7 +64,8 @@ def Give(opt, datapath):
     test_conversion  = {i:total_conversion[key] for i,key in enumerate(test)}
 
     ###
-    test_image_dict = {key:image_dict[key] for key in test}
+    if not opt.split_subset_perc:
+        test_image_dict = {key:image_dict[key] for key in test}
 
     ###
     print('\nDataset Setup:\nUsing Train-Val Split: {0}\n#Classes: Train ({1}) | Val ({2}) | Test ({3})\n'.format(opt.use_tv_split, len(train_image_dict), len(val_image_dict) if val_image_dict else 'X', len(test_image_dict)))
